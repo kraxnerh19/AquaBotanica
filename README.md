@@ -8,7 +8,7 @@ Dieses Projekt nutzt das Wio Terminal, um Umgebungsdaten wie Temperatur, Luftfeu
 
 | **Sensor-Pin** | **Funktion**         | **Wio Terminal-Anschluss** |
 |----------------|----------------------|----------------------------|
-| **VCC**        | Versorgungsspannung  | **Pin 1 (3.3V)**           |
+| **VCC**        | Versorgungsspannung  | **Pin 2 (5V)**             |
 | **GND**        | Masse                | **Pin 6 (GND)**            |
 | **Signal**     | Analogsignal-Ausgang | **Pin 16 (A2)**            |
 
@@ -20,8 +20,8 @@ Schließe den Sensor an den analogen Grove-Port (rechter Port A0) des Wio Termin
 
 | **RTC-Pin** | **Funktion**         | **Wio Terminal-Anschluss** |
 |-------------|----------------------|----------------------------|
-| **VCC**     | Versorgungsspannung  | **Pin 17 (3.3V)**          |
-| **GND**     | Masse                | **Pin 6 (GND)**            |
+| **VCC**     | Versorgungsspannung  | **Pin 1 (3.3V)**           |
+| **GND**     | Masse                | **Pin 9 (GND)**            |
 | **SDA**     | I²C-Datenleitung     | **Pin 3 (SDA)**            |
 | **SCL**     | I²C-Taktleitung      | **Pin 5 (SCL)**            |
 
