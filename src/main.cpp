@@ -24,6 +24,46 @@ unsigned long previousSensorUpdate = 0; // Letzte Aktualisierung der Sensorwerte
 const unsigned long timeInterval = 1000; // Intervall für Zeitaktualisierung (1 Sekunde)
 const unsigned long sensorInterval = 4000; // Intervall für Sensoraktualisierung (4 Sekunden)
 
+void connectToWiFi() {
+    int maxRetries = 2;  // Maximale Anzahl an Versuchen
+    int retryCount = 0;  // Zähler für Versuche
+
+    tft.setCursor(10, 10);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.println("Verbinde mit WLAN...");
+    Serial.println("Verbinde mit WLAN...");
+
+    WiFi.begin(ssid, password);
+
+    // Wiederhole Verbindung bis Maximum erreicht ist
+    while (WiFi.status() != WL_CONNECTED && retryCount < maxRetries) {
+        delay(500);
+        Serial.print(".");
+        tft.print(".");
+        retryCount++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        tft.fillScreen(TFT_BLACK);  // Bildschirm sofort nach Verbindung leeren
+        tft.setTextColor(TFT_GREEN);
+        tft.setTextSize(2);
+        tft.setCursor(10, 10);
+        tft.println("WLAN verbunden!");
+        Serial.println("\nWLAN verbunden!");
+    } else {
+        tft.fillScreen(TFT_BLACK);  // Bildschirm leeren
+        tft.setTextColor(TFT_RED);
+        tft.setTextSize(2);
+        tft.setCursor(10, 10);
+        tft.println("WLAN fehlgeschlagen!");
+        Serial.println("\nWLAN fehlgeschlagen!");
+    }
+
+    delay(2000);  // Zeit für die Anzeige der Erfolgsnachricht oder Fehlermeldung
+    tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für nächsten Abschnitt
+}
+
 void setup() {
     Serial.begin(115200);         // Serial Monitor starten
     pinMode(MOISTURE_PIN, INPUT); // Feuchtigkeitssensor als Eingang konfigurieren
@@ -69,24 +109,7 @@ void setup() {
         Serial.println("CSV-Datei existiert bereits, kein Header geschrieben.");
     }
 
-    // WiFi verbinden
-    tft.setCursor(10, 10);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.println("Verbinde mit WLAN...");
-    WiFi.begin(ssid, password);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-        tft.print(".");
-    }
-
-    tft.fillScreen(TFT_BLACK);  // Bildschirm sofort nach Verbindung leeren
-    tft.setTextColor(TFT_GREEN);
-    tft.setTextSize(2);
-    tft.setCursor(10, 10);
-    tft.println("WLAN verbunden!");
+    connectToWiFi();
 
     delay(2000);  // Zeit für die Anzeige der Erfolgsnachricht
     tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für Sensoranzeige
@@ -103,6 +126,8 @@ void setup() {
     tft.setCursor(10, 170);
     tft.println("Status:");
 }
+
+
 
 void updateTimeDisplay() {
     DateTime now = rtc.now();
