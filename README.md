@@ -14,7 +14,7 @@ Dieses Projekt nutzt das Wio Terminal, um Umgebungsdaten wie Temperatur, Luftfeu
 
 ### **2. DHT-Sensor**
 
-Schließe den Sensor an den analogen Grove-Port (rechter Port A0) des Wio Terminals an.
+Schließe den Sensor an den analogen Grove-Port (rechter Grove-Port A0) des Wio Terminals an.
 
 ### **3. RTC Sensor**
 
@@ -32,6 +32,10 @@ Schließe den Sensor an den analogen Grove-Port (rechter Port A0) des Wio Termin
 | **VCC**     | Versorgungsspannung  | **Pin 17 (3.3V)**          |
 | **GND**     | Masse                | **Pin 34 (GND)**           |
 | **SIG**     | Digitalsignal        | **Pin 33 (D6)**            |
+
+### **5. Time of Flight Distance Sensor**
+
+Schließe den Sensor an den I²C Grove-Port (linker Grove-Port) des Wio Terminals an.
 ---
 
 ## Vorbereitung
