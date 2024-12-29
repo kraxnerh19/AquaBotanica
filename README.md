@@ -36,6 +36,7 @@ Schließe den Sensor an den analogen Grove-Port (rechter Grove-Port A0) des Wio 
 ### **5. Time of Flight Distance Sensor**
 
 Schließe den Sensor an den I²C Grove-Port (linker Grove-Port) des Wio Terminals an.
+
 ---
 
 ## Vorbereitung
