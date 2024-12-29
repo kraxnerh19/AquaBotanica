@@ -7,6 +7,8 @@
 #include <RTClib.h>
 #include <SD.h>
 #include <WiFiUdp.h>    // Bibliothek für UDP-Verbindung (NTP nutzt UDP)
+#include <Wire.h>       // I2C-Bibliothek für VL53L0X
+#include <Adafruit_VL53L0X.h>  // VL53L0X-Bibliothek für Entfernungsmessung
 
 //Definitionen
 #define MOISTURE_PIN A2     // Pin A2 für den Feuchtigkeitssensor am rechten Grove-Anschluss
@@ -14,10 +16,13 @@
 #define DHT_PIN 0           // Grove-Analoganschluss für den DHT-Sensor (Standard ist D0 oder A0)
 #define DHT_TYPE DHT11      // Typ des DHT-Sensors, falls Sie DHT11 oder DHT22 verwenden
 #define SDCARD_SS_PIN       // CS-Pin für die SD-Karte, prüfen Sie Ihren Anschluss!
+#define DIST_THRESHOLD 100  // Abstandsschwelle in mm für das Display (wenn unter diesem Wert wird das Display aktualisiert)
+
 File dataFile;              // Dateiobjekt für das Speichern der Daten
 DHT dht(DHT_PIN, DHT_TYPE); // DHT-Sensor-Objekt erstellen
 TFT_eSPI tft = TFT_eSPI();  // Display-Objekt erstellen
 RTC_DS3231 rtc;             // RTC-Objekt erstellen
+Adafruit_VL53L0X lox = Adafruit_VL53L0X(); // Instanz für Distanz Sensor 
 
 // Konfiguration für NTP
 const char* ntpServer = "pool.ntp.org"; // NTP-Server-Adresse
@@ -36,6 +41,10 @@ unsigned long previousTimeUpdate = 0; // Letzte Aktualisierung der Uhrzeit
 unsigned long previousSensorUpdate = 0; // Letzte Aktualisierung der Sensorwerte
 const unsigned long timeInterval = 1000; // Intervall für Zeitaktualisierung (1 Sekunde)
 const unsigned long sensorInterval = 4000; // Intervall für Sensoraktualisierung (4 Sekunden)
+const unsigned long displayTimeout = 15000; // Timeout für die Anzeige von Sensorwerten (30 Sekunden)
+bool isDisplayingSensorValues = false;
+unsigned long displayUpdateTime = 0;
+bool firstMainScreen = false;
 
 void connectToWiFi() {
     int maxRetries = 2;  // Maximale Anzahl an Versuchen
@@ -73,8 +82,7 @@ void connectToWiFi() {
         Serial.println("\nWLAN fehlgeschlagen!");
     }
 
-    delay(2000);  // Zeit für die Anzeige der Erfolgsnachricht oder Fehlermeldung
-    tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für nächsten Abschnitt
+    delay(2000); 
 }
 
 void getNtpTime() {
@@ -157,6 +165,136 @@ void getNtpTime() {
     udp.stop(); // UDP beenden
 }
 
+void updateTimeDisplay() {
+    DateTime now = rtc.now();
+    char timeBuffer[16];
+    snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
+    tft.fillRect(200, 10, 100, 30, TFT_BLACK);
+    tft.setCursor(200, 10);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.println(timeBuffer);
+}
+
+void controlRelayBasedOnMoisture(int moistureValue) {
+    if (moistureValue <= 10) { 
+        digitalWrite(RELAY_PIN, HIGH);  // Relais einschalten
+    } else if (moistureValue > 10 && moistureValue <= 300) {
+        digitalWrite(RELAY_PIN, LOW);  // Relais ausschalten
+    } else {
+        digitalWrite(RELAY_PIN, LOW);  // Relais ausschalten
+    }
+}
+
+void updateSensorData(int moistureValue, float temperature, float humidity) {
+    if (moistureValue != lastMoistureValue || firstMainScreen) {
+        tft.fillRect(200, 50, 80, 30, TFT_BLACK);
+        tft.setCursor(200, 50);
+        tft.setTextColor(TFT_WHITE);
+        tft.setTextSize(2);
+        tft.print(moistureValue);
+        lastMoistureValue = moistureValue;
+    }
+
+    if (temperature != lastTemperature || firstMainScreen) {
+        tft.fillRect(200, 90, 100, 30, TFT_BLACK);
+        tft.setCursor(200, 90);
+        tft.setTextColor(TFT_WHITE);
+        tft.setTextSize(2);
+        tft.print(temperature);
+        tft.print(" C");
+        lastTemperature = temperature;
+    }
+
+    if (humidity != lastHumidity || firstMainScreen) {
+        tft.fillRect(200, 130, 100, 30, TFT_BLACK);
+        tft.setCursor(200, 130);
+        tft.setTextColor(TFT_WHITE);
+        tft.setTextSize(2);
+        tft.print(humidity);
+        tft.print(" %");
+        lastHumidity = humidity;
+    }
+
+    tft.fillRect(10, 210, 300, 30, TFT_BLACK);
+    String statusMessage;
+    if (moistureValue <= 10) {
+        statusMessage = "Bitte giessen";
+        tft.setTextColor(TFT_RED);
+    } else if (moistureValue > 10 && moistureValue <= 300) {
+        statusMessage = "Bald giessen";
+        tft.setTextColor(TFT_YELLOW);
+    } else {
+        statusMessage = "Alles gut";
+        tft.setTextColor(TFT_GREEN);
+    }
+    tft.setCursor(20, 210);
+    tft.setTextSize(2);
+    tft.println(statusMessage);
+    //Relai
+    controlRelayBasedOnMoisture(moistureValue);
+
+}
+
+void logDataToCSV(int moistureValue, float temperature, float humidity) {
+    dataFile = SD.open("sensors.csv", FILE_WRITE); // Datei im Anhängemodus öffnen
+    if (dataFile) {
+        DateTime now = rtc.now(); // Aktuelle Uhrzeit abrufen
+        char timeBuffer[16];
+        snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
+
+        // Datenzeile in die CSV schreiben
+        dataFile.print(timeBuffer); // Zeit
+        dataFile.print(",");
+        dataFile.print(moistureValue); // Feuchtigkeit
+        dataFile.print(",");
+        dataFile.print(temperature); // Temperatur
+        dataFile.print(",");
+        dataFile.println(humidity); // Luftfeuchtigkeit
+
+        dataFile.close(); // Datei schließen
+        //Serial.println("Daten erfolgreich in CSV gespeichert!");
+    } else {
+        Serial.println("Fehler beim Öffnen der CSV-Datei!");
+    }
+}
+
+// Hauptbildschirm mit Sensorwerten
+void mainScreen() {
+    //Update Screen
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(10, 10);
+    tft.println("Uhrzeit:");
+    tft.setCursor(10, 50);
+    tft.println("Pflanze F.:");
+    tft.setCursor(10, 90);
+    tft.println("Temperatur:");
+    tft.setCursor(10, 130);
+    tft.println("Luft F.:");
+    tft.setCursor(10, 170);
+    tft.println("Status:");
+
+    //Update Sensordaten, Zeit, Relai
+    int moistureValue = analogRead(MOISTURE_PIN);
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+    updateSensorData(moistureValue, temperature, humidity);
+    updateTimeDisplay();
+    controlRelayBasedOnMoisture(moistureValue);
+    isDisplayingSensorValues = true;
+}
+
+// Standby Screen
+void showStandbyScreen() {
+    tft.fillScreen(TFT_BLACK); 
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(10, 50);
+    tft.println("ToDO");
+}
+
 void setup() {
     Serial.begin(115200);         // Serial Monitor starten
     pinMode(MOISTURE_PIN, INPUT); // Feuchtigkeitssensor als Eingang konfigurieren
@@ -176,6 +314,13 @@ void setup() {
     if (!rtc.begin()) {
         Serial.println("RTC nicht gefunden!");
         while (1);
+    }
+
+    if (!lox.begin()) {
+        Serial.println("VL53L0X Sensor konnte nicht initialisiert werden.");
+        while (1);  // Falls der Sensor nicht gefunden wird, bleibe hier
+    } else {
+        Serial.println("VL53L0X Sensor initialisiert.");
     }
 
     // RTC Zeit Konfigurieren
@@ -210,114 +355,59 @@ void setup() {
 
     delay(2000);  // Zeit für die Anzeige der Erfolgsnachricht
     tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für Sensoranzeige
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(10, 10);
-    tft.println("Uhrzeit:");
-    tft.setCursor(10, 50);
-    tft.println("Pflanze F.:");
-    tft.setCursor(10, 90);
-    tft.println("Temperatur:");
-    tft.setCursor(10, 130);
-    tft.println("Luft F.:");
-    tft.setCursor(10, 170);
-    tft.println("Status:");
-}
-
-void updateTimeDisplay() {
-    DateTime now = rtc.now();
-    char timeBuffer[16];
-    snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
-    tft.fillRect(200, 10, 100, 30, TFT_BLACK);
-    tft.setCursor(200, 10);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.println(timeBuffer);
-}
-
-void updateSensorData(int moistureValue, float temperature, float humidity) {
-    if (moistureValue != lastMoistureValue) {
-        tft.fillRect(200, 50, 80, 30, TFT_BLACK);
-        tft.setCursor(200, 50);
-        tft.setTextColor(TFT_WHITE);
-        tft.setTextSize(2);
-        tft.print(moistureValue);
-        lastMoistureValue = moistureValue;
-    }
-
-    if (temperature != lastTemperature) {
-        tft.fillRect(200, 90, 100, 30, TFT_BLACK);
-        tft.setCursor(200, 90);
-        tft.setTextColor(TFT_WHITE);
-        tft.setTextSize(2);
-        tft.print(temperature);
-        tft.print(" C");
-        lastTemperature = temperature;
-    }
-
-    if (humidity != lastHumidity) {
-        tft.fillRect(200, 130, 100, 30, TFT_BLACK);
-        tft.setCursor(200, 130);
-        tft.setTextColor(TFT_WHITE);
-        tft.setTextSize(2);
-        tft.print(humidity);
-        tft.print(" %");
-        lastHumidity = humidity;
-    }
-
-    tft.fillRect(10, 210, 300, 30, TFT_BLACK);
-    String statusMessage;
-    if (moistureValue <= 10) {
-        statusMessage = "Bitte giessen";
-        digitalWrite(RELAY_PIN, HIGH); // Relais einschalten
-        tft.setTextColor(TFT_RED);
-    } else if (moistureValue > 10 && moistureValue <= 300) {
-        statusMessage = "Bald giessen";
-        tft.setTextColor(TFT_YELLOW);
-        digitalWrite(RELAY_PIN, LOW); // Relais ausschalten
-    } else {
-        statusMessage = "Alles gut";
-        tft.setTextColor(TFT_GREEN);
-        digitalWrite(RELAY_PIN, LOW); // Relais ausschalten
-    }
-    tft.setCursor(20, 210);
-    tft.setTextSize(2);
-    tft.println(statusMessage);
-}
-
-void logDataToCSV(int moistureValue, float temperature, float humidity) {
-    dataFile = SD.open("sensors.csv", FILE_WRITE); // Datei im Anhängemodus öffnen
-    if (dataFile) {
-        DateTime now = rtc.now(); // Aktuelle Uhrzeit abrufen
-        char timeBuffer[16];
-        snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
-
-        // Datenzeile in die CSV schreiben
-        dataFile.print(timeBuffer); // Zeit
-        dataFile.print(",");
-        dataFile.print(moistureValue); // Feuchtigkeit
-        dataFile.print(",");
-        dataFile.print(temperature); // Temperatur
-        dataFile.print(",");
-        dataFile.println(humidity); // Luftfeuchtigkeit
-
-        dataFile.close(); // Datei schließen
-        //Serial.println("Daten erfolgreich in CSV gespeichert!");
-    } else {
-        Serial.println("Fehler beim Öffnen der CSV-Datei!");
-    }
+    mainScreen();
 }
 
 void loop() {
     unsigned long currentMillis = millis();
+    uint16_t distance = lox.readRange();
 
-     // Uhrzeit jede Sekunde aktualisieren
-    if (currentMillis - previousTimeUpdate >= timeInterval) {
+    //Main-Screen und Standby-Screen Anzeige
+
+     if (distance <= DIST_THRESHOLD) {
+        if (!isDisplayingSensorValues) {
+            displayUpdateTime = currentMillis;  // Timer starten, wenn der Abstand unter der Schwelle liegt
+            isDisplayingSensorValues = true;
+            firstMainScreen = true;
+            mainScreen();
+        }
+    } else {
+        if (isDisplayingSensorValues && currentMillis - displayUpdateTime >= displayTimeout) {
+            showStandbyScreen(); 
+            isDisplayingSensorValues = false;
+            firstMainScreen = false;
+        }
+    }
+
+    if (!isDisplayingSensorValues && currentMillis - previousSensorUpdate >= sensorInterval) {
+        previousSensorUpdate = currentMillis;
+        int moistureValue = analogRead(MOISTURE_PIN);
+        controlRelayBasedOnMoisture(moistureValue);
+    }
+
+    // Uhrzeit jede Sekunde aktualisieren
+    if (isDisplayingSensorValues && currentMillis - previousTimeUpdate >= timeInterval) {
         previousTimeUpdate = currentMillis;
         updateTimeDisplay();
     }
 
     // Sensorwerte alle 4 Sekunden aktualisieren
+    if (isDisplayingSensorValues && currentMillis - previousSensorUpdate >= sensorInterval) {
+        previousSensorUpdate = currentMillis;
+        firstMainScreen = false;
+        int moistureValue = analogRead(MOISTURE_PIN);
+        float temperature = dht.readTemperature();
+        float humidity = dht.readHumidity();
+
+        if (!isnan(temperature) && !isnan(humidity)) {
+            updateSensorData(moistureValue, temperature, humidity);
+            controlRelayBasedOnMoisture(moistureValue);
+        } else {
+            Serial.println("Fehler beim Lesen eines Sensors!");
+        }
+    }
+
+    // Daten auf SD Karte schreiben alle 4 Sekunden
     if (currentMillis - previousSensorUpdate >= sensorInterval) {
         previousSensorUpdate = currentMillis;
 
@@ -326,10 +416,9 @@ void loop() {
         float humidity = dht.readHumidity();
 
         if (!isnan(temperature) && !isnan(humidity)) {
-            updateSensorData(moistureValue, temperature, humidity);
             logDataToCSV(moistureValue, temperature, humidity);
         } else {
-            Serial.println("Fehler beim Lesen des DHT-Sensors!");
+            Serial.println("Fehler beim Lesen eines Sensors!");
         }
     }
 }
