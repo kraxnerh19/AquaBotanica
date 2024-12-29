@@ -1,3 +1,4 @@
+//Libaries
 #include "config.h"
 #include <Arduino.h>
 #include <TFT_eSPI.h>   // Bibliothek für das Display des Wio Terminals
@@ -5,15 +6,27 @@
 #include <rpcWiFi.h>    // Bibliothek für WLAN-Verbindung
 #include <RTClib.h>
 #include <SD.h>
+#include <WiFiUdp.h>    // Bibliothek für UDP-Verbindung (NTP nutzt UDP)
 
-#define MOISTURE_PIN A2 // Pin A1 für den Feuchtigkeitssensor am rechten Grove-Anschluss
-#define DHT_PIN 0       // Grove-Analoganschluss für den DHT-Sensor (Standard ist D0 oder A0)
-#define DHT_TYPE DHT11  // Typ des DHT-Sensors, falls Sie DHT11 oder DHT22 verwenden
-#define SDCARD_SS_PIN // CS-Pin für die SD-Karte, prüfen Sie Ihren Anschluss!
-File dataFile; // Dateiobjekt für das Speichern der Daten
+//Definitionen
+#define MOISTURE_PIN A2     // Pin A2 für den Feuchtigkeitssensor am rechten Grove-Anschluss
+#define RELAY_PIN D6       // Pin D1, entspricht dem A1-Anschluss des Terminals
+#define DHT_PIN 0           // Grove-Analoganschluss für den DHT-Sensor (Standard ist D0 oder A0)
+#define DHT_TYPE DHT11      // Typ des DHT-Sensors, falls Sie DHT11 oder DHT22 verwenden
+#define SDCARD_SS_PIN       // CS-Pin für die SD-Karte, prüfen Sie Ihren Anschluss!
+File dataFile;              // Dateiobjekt für das Speichern der Daten
 DHT dht(DHT_PIN, DHT_TYPE); // DHT-Sensor-Objekt erstellen
 TFT_eSPI tft = TFT_eSPI();  // Display-Objekt erstellen
 RTC_DS3231 rtc;             // RTC-Objekt erstellen
+
+// Konfiguration für NTP
+const char* ntpServer = "pool.ntp.org"; // NTP-Server-Adresse
+const int ntpPort = 123;                // NTP-Port (Standard ist 123)
+WiFiUDP udp;                            // UDP-Instanz für NTP
+
+// Offset für Zeitzone (in Sekunden)
+const long gmtOffsetSec = 3600;
+int daylightOffsetSec = 0; // Sommerzeit-Offset in Sekunden
 
 int lastMoistureValue = -1; // Speichern des vorherigen Feuchtigkeitswerts
 float lastTemperature = -1000; // Speichern des vorherigen Temperaturwerts
@@ -64,9 +77,92 @@ void connectToWiFi() {
     tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für nächsten Abschnitt
 }
 
+void getNtpTime() {
+    // Display Ausgabe
+    tft.setCursor(10, 10);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.println("NTP Zeit holen...");
+    Serial.println("NTP Zeit holen...");
+
+    // UDP starten
+    udp.begin(ntpPort);
+    Serial.println("NTP-Client gestartet...");
+
+    // NTP-Anfrage vorbereiten
+    byte packetBuffer[48]; // NTP-Paket hat eine feste Größe von 48 Bytes
+    memset(packetBuffer, 0, 48);
+
+    // NTP-Paket Header konfigurieren
+    packetBuffer[0] = 0b11100011; // LI, Version, Mode
+    packetBuffer[1] = 0;          // Stratum
+    packetBuffer[2] = 6;          // Polling Interval
+    packetBuffer[3] = 0xEC;       // Precision
+
+    // NTP-Anfrage an den Server senden
+    udp.beginPacket(ntpServer, ntpPort);
+    udp.write(packetBuffer, 48);
+    udp.endPacket();
+
+    // Warten auf Antwort
+    delay(1000);
+
+    if (udp.parsePacket()) {
+        Serial.println("Antwort vom NTP-Server erhalten!");
+
+        // NTP-Antwort lesen
+        udp.read(packetBuffer, 48);
+
+        // Zeitstempel auslesen (Bytes 40–43 im Paket enthalten die Zeit in Sekunden seit 1900)
+        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+        unsigned long secsSince1900 = (highWord << 16) | lowWord;
+
+        // Epoch-Zeit berechnen (1970 ist der Startpunkt der Unix-Zeit)
+        const unsigned long seventyYears = 2208988800UL;
+        unsigned long epoch = secsSince1900 - seventyYears;
+
+        // Berechnung für Sommerzeit oder Winterzeit
+        DateTime now = rtc.now();  
+        int year = now.year();
+        DateTime lastSundayMarch(year, 3, 31);
+        while (lastSundayMarch.dayOfTheWeek() != 0) {
+            lastSundayMarch = lastSundayMarch - TimeSpan(1);
+        }
+        DateTime lastSundayOctober(year, 10, 31);
+        while (lastSundayOctober.dayOfTheWeek() != 0) {
+            lastSundayOctober = lastSundayOctober - TimeSpan(1);
+        }
+        if (now >= lastSundayMarch && now <= lastSundayOctober) {
+            daylightOffsetSec = 3600;  // Sommerzeit-Offset
+            Serial.println("Sommerzeit aktiv.");
+        } else {
+            daylightOffsetSec = 0;  // Kein Sommerzeit-Offset
+            Serial.println("Winterzeit aktiv.");
+        }
+        
+        // Zeitzonen-Offset anwenden
+        epoch += gmtOffsetSec;
+        if (daylightOffsetSec) {
+            epoch += daylightOffsetSec;
+        }
+
+        // RTC synchronisieren
+        rtc.adjust(DateTime(epoch));
+        Serial.println("RTC erfolgreich synchronisiert!");
+    } else {
+        Serial.println("Keine Antwort vom NTP-Server erhalten!");
+    }
+
+    udp.stop(); // UDP beenden
+}
+
 void setup() {
     Serial.begin(115200);         // Serial Monitor starten
     pinMode(MOISTURE_PIN, INPUT); // Feuchtigkeitssensor als Eingang konfigurieren
+    pinMode(RELAY_PIN, OUTPUT);   // Relais-Pin als Ausgang konfigurieren
+    digitalWrite(PIN_WIRE_SCL, LOW);  // Relais im Default als LOW setzen -> ausschalten
+
     // Display initialisieren
     tft.begin();
     tft.setRotation(3);           // Querformat
@@ -110,6 +206,7 @@ void setup() {
     }
 
     connectToWiFi();
+    getNtpTime();
 
     delay(2000);  // Zeit für die Anzeige der Erfolgsnachricht
     tft.fillScreen(TFT_BLACK);  // Bildschirm erneut leeren für Sensoranzeige
@@ -126,8 +223,6 @@ void setup() {
     tft.setCursor(10, 170);
     tft.println("Status:");
 }
-
-
 
 void updateTimeDisplay() {
     DateTime now = rtc.now();
@@ -174,13 +269,16 @@ void updateSensorData(int moistureValue, float temperature, float humidity) {
     String statusMessage;
     if (moistureValue <= 10) {
         statusMessage = "Bitte giessen";
+        digitalWrite(RELAY_PIN, HIGH); // Relais einschalten
         tft.setTextColor(TFT_RED);
     } else if (moistureValue > 10 && moistureValue <= 300) {
         statusMessage = "Bald giessen";
         tft.setTextColor(TFT_YELLOW);
+        digitalWrite(RELAY_PIN, LOW); // Relais ausschalten
     } else {
         statusMessage = "Alles gut";
         tft.setTextColor(TFT_GREEN);
+        digitalWrite(RELAY_PIN, LOW); // Relais ausschalten
     }
     tft.setCursor(20, 210);
     tft.setTextSize(2);
