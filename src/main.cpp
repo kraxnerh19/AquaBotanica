@@ -9,6 +9,7 @@
 #include <WiFiUdp.h>    // Bibliothek für UDP-Verbindung (NTP nutzt UDP)
 #include <Wire.h>       // I2C-Bibliothek für VL53L0X
 #include <Adafruit_VL53L0X.h>  // VL53L0X-Bibliothek für Entfernungsmessung
+#include "lcd_backlight.hpp"
 
 //Definitionen
 #define MOISTURE_PIN A2     // Pin A2 für den Feuchtigkeitssensor am rechten Grove-Anschluss
@@ -17,12 +18,15 @@
 #define DHT_TYPE DHT11      // Typ des DHT-Sensors, falls Sie DHT11 oder DHT22 verwenden
 #define SDCARD_SS_PIN       // CS-Pin für die SD-Karte, prüfen Sie Ihren Anschluss!
 #define DIST_THRESHOLD 100  // Abstandsschwelle in mm für das Display (wenn unter diesem Wert wird das Display aktualisiert)
+#define TFT_DARKORANGE  0xFCC0
+#define TFT_DARKYELLOW  0xCD00
 
 File dataFile;              // Dateiobjekt für das Speichern der Daten
 DHT dht(DHT_PIN, DHT_TYPE); // DHT-Sensor-Objekt erstellen
 TFT_eSPI tft = TFT_eSPI();  // Display-Objekt erstellen
 RTC_DS3231 rtc;             // RTC-Objekt erstellen
 Adafruit_VL53L0X lox = Adafruit_VL53L0X(); // Instanz für Distanz Sensor 
+static LCDBackLight backLight;
 
 // Konfiguration für NTP
 const char* ntpServer = "pool.ntp.org"; // NTP-Server-Adresse
@@ -41,10 +45,11 @@ unsigned long previousTimeUpdate = 0; // Letzte Aktualisierung der Uhrzeit
 unsigned long previousSensorUpdate = 0; // Letzte Aktualisierung der Sensorwerte
 const unsigned long timeInterval = 1000; // Intervall für Zeitaktualisierung (1 Sekunde)
 const unsigned long sensorInterval = 4000; // Intervall für Sensoraktualisierung (4 Sekunden)
-const unsigned long displayTimeout = 15000; // Timeout für die Anzeige von Sensorwerten (30 Sekunden)
+const unsigned long displayTimeout = 15000; // Timeout für die Anzeige von Sensorwerten (15 Sekunden)
 bool isDisplayingSensorValues = false;
 unsigned long displayUpdateTime = 0;
 bool firstMainScreen = false;
+unsigned long previousFlowerUpdate = 0;
 
 void connectToWiFi() {
     int maxRetries = 2;  // Maximale Anzahl an Versuchen
@@ -87,11 +92,12 @@ void connectToWiFi() {
 
 void getNtpTime() {
     // Display Ausgabe
+    tft.fillScreen(TFT_BLACK);
     tft.setCursor(10, 10);
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(2);
-    tft.println("NTP Zeit holen...");
-    Serial.println("NTP Zeit holen...");
+    tft.println("NTP Zeit festlegen...");
+    Serial.println("NTP Zeit festlegen...");
 
     // UDP starten
     udp.begin(ntpPort);
@@ -164,6 +170,81 @@ void getNtpTime() {
 
     udp.stop(); // UDP beenden
 }
+
+// Funktion zum Zeichnen eines Kreisbogens
+void drawArc(int x, int y, int r, int startAngle, int endAngle, uint16_t color, int thickness) {
+    for (int i = startAngle; i <= endAngle; i++) {
+    float angle = i * 3.14159 / 180.0;
+    int x0 = x + (int)(cos(angle) * r);
+    int y0 = y - (int)(sin(angle) * r);
+    tft.drawPixel(x0, y0, color);
+
+        for (int j = -thickness / 2; j < thickness / 2; j++) {
+            tft.drawPixel(x0 + j, y0, color);
+        }
+    }
+}
+
+// Funktion zum Zeichnen der Sonnenblume
+void drawSunflower(String mood, uint16_t faceColor) {
+    tft.fillScreen(TFT_BLACK); // Bildschirm löschen
+
+    int centerX = 160; // horizontal zentriert
+    int centerY = 90;  
+    int faceRadius = 50; // Radius des Gesichts
+
+    for (int angle = 0; angle < 360; angle += 30) {
+    float rad = angle * 3.14159 / 180.0;
+    int xOffset = (int)(cos(rad) * 60);
+    int yOffset = (int)(sin(rad) * 60);
+
+    tft.fillCircle(centerX + xOffset,centerY + yOffset,20,TFT_YELLOW);
+    }
+
+    //Gesicht
+    tft.fillCircle(centerX, centerY, faceRadius, faceColor);
+
+    //Augen
+    tft.fillCircle(centerX - 25, centerY - 12, 6, TFT_BLACK); // Linkes Auge
+    tft.fillCircle(centerX + 25, centerY - 12, 6, TFT_BLACK); // Rechtes Auge
+
+    //Mund
+    int mouthY = centerY + 20;  
+    int mouthRadius = 25;      
+
+    if (mood == "happy") {
+    // Lachender Mund (oben gewölbt)
+    drawArc(centerX, mouthY, mouthRadius, 180, 360, TFT_BLACK, 4);
+    } 
+    else if (mood == "sad") {
+    // Trauriger Mund (unten gewölbt)
+    drawArc(centerX, mouthY + 10, mouthRadius, 0, 180, TFT_BLACK, 4);
+    } 
+    else {
+    // Neutraler Mund (gerade Linie)
+    tft.fillRect(centerX - 25, mouthY - 2, 50, 4, TFT_BLACK);
+    }
+
+    //Stiel
+    int stemWidth = 12; 
+    int stemX = centerX - stemWidth / 2;
+    int stemY = centerY + faceRadius; 
+    int stemHeight = 100; 
+
+    tft.fillRect(stemX, stemY, stemWidth, stemHeight, TFT_GREEN);
+
+    //Blätter
+    int leafCenterY = stemY + stemHeight / 2 + 10; 
+    int leafOffsetX = 40;   
+    int leafRadiusX = 30;   
+    int leafRadiusY = 15;   
+
+    // Linkes Blatt
+    tft.fillEllipse(centerX - leafOffsetX, leafCenterY, leafRadiusX, leafRadiusY, TFT_GREEN);
+    // Rechtes Blatt
+    tft.fillEllipse(centerX + leafOffsetX, leafCenterY, leafRadiusX, leafRadiusY, TFT_GREEN);
+}
+
 
 void updateTimeDisplay() {
     DateTime now = rtc.now();
@@ -262,6 +343,7 @@ void logDataToCSV(int moistureValue, float temperature, float humidity) {
 // Hauptbildschirm mit Sensorwerten
 void mainScreen() {
     //Update Screen
+    backLight.setBrightness(100);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(2);
@@ -289,10 +371,9 @@ void mainScreen() {
 // Standby Screen
 void showStandbyScreen() {
     tft.fillScreen(TFT_BLACK); 
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(10, 50);
-    tft.println("ToDO");
+    backLight.setBrightness(20);
+    tft.setCursor(10, 10);
+    drawSunflower("neutral", TFT_DARKYELLOW);
 }
 
 void setup() {
@@ -326,6 +407,8 @@ void setup() {
     // RTC Zeit Konfigurieren
     //rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // Zeit einstellen
     //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)).unixtime() + 16); // 16 Sekunden hinzufügen (Falls nicht korrekt)
+
+    backLight.initialize();
 
     // SD-Karte initialisieren
     if (!SD.begin(SDCARD_SS_PIN)) {
@@ -404,6 +487,22 @@ void loop() {
             controlRelayBasedOnMoisture(moistureValue);
         } else {
             Serial.println("Fehler beim Lesen eines Sensors!");
+        }
+    }
+
+    //Standby Screen
+    if (!isDisplayingSensorValues && currentMillis - previousFlowerUpdate >= sensorInterval) {
+        previousFlowerUpdate = currentMillis;
+
+        int moistureValue = analogRead(MOISTURE_PIN);
+        uint16_t faceColor = TFT_DARKORANGE;
+
+        if (moistureValue > 300) { // In Ordnung
+            drawSunflower("happy", faceColor);
+        } else if (moistureValue > 10) { // Bald gießen
+            drawSunflower("neutral", faceColor);
+        } else { // Sofort gießen
+            drawSunflower("sad", faceColor);
         }
     }
 
